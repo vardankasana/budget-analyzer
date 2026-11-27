@@ -1,0 +1,302 @@
+"""
+Budget Analyzer
+Course: 2026CSAE100 - Computational Thinking and Programming
+Bennett University
+Team: Hammad Alam, Vardan, Vyom, Sharif, Swarn
+Features:
+- Add income/expense transactions
+- Clean receipt names and remove duplicates
+- Automatic category detection
+- Monthly budget status: SAFE / WARNING / OVER BUDGET
+- Category-wise spending
+- Red-flag detection (> 5x average transaction)
+- Savings and next-month spending prediction
+- CSV save/load
+- Input validation and exception handling
+"""
+
+import csv
+import os
+from collections import defaultdict
+from datetime import datetime
+
+DATA_FILE = "transactions.csv"
+
+CATEGORIES = {
+    "groceries": ["mkt enterprises", "grocery", "groceries", "market", "supermarket", "zepto", "blinkit"],
+    "dining": ["dominos", "pizza", "restaurant", "cafe", "food", "swiggy", "zomato", "mess"],
+    "gadgets": ["apple", "samsung", "laptop", "phone", "electronics", "headphones", "gadget"],
+    "travel": ["uber", "ola", "metro", "bus", "flight", "train", "travel"],
+    "healthcare": ["pharmacy", "medical", "hospital", "doctor", "medicine", "healthcare"],
+}
+
+DISPLAY_CATEGORIES = {
+    "groceries": "Groceries",
+    "dining": "Dining",
+    "gadgets": "Gadgets",
+    "travel": "Travel",
+    "healthcare": "Healthcare",
+    "other": "Other",
+}
+
+
+def clean_name(name):
+    """Strip extra spaces and normalize capitalization."""
+    return " ".join(str(name).strip().lower().split())
+
+
+def categorize(name):
+    """Assign a category using keyword matching."""
+    cleaned = clean_name(name)
+    for category, keywords in CATEGORIES.items():
+        if any(keyword in cleaned for keyword in keywords):
+            return category
+    return "other"
+
+
+def parse_amount(value):
+    """Validate and convert an amount to a positive float."""
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("Amount must be numeric.")
+    if amount <= 0:
+        raise ValueError("Amount must be greater than zero.")
+    return round(amount, 2)
+
+
+def parse_date(value):
+    """Validate date in YYYY-MM-DD format."""
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+    except (ValueError, AttributeError):
+        raise ValueError("Date must be in YYYY-MM-DD format.")
+
+
+def remove_duplicates(transactions):
+    """Remove duplicate transactions based on name, amount and date."""
+    seen = set()
+    unique = []
+    for tx in transactions:
+        key = (clean_name(tx["name"]), round(float(tx["amount"]), 2), tx["date"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(tx)
+    return unique
+
+
+def add_transaction(transactions, name, amount, date, kind, payment="UPI", notes=""):
+    """Create and append a transaction."""
+    kind = kind.lower().strip()
+    if kind not in ("income", "expense"):
+        raise ValueError("Type must be income or expense.")
+    tx = {
+        "name": clean_name(name),
+        "amount": parse_amount(amount),
+        "date": parse_date(date).isoformat(),
+        "type": kind,
+        "category": "Income" if kind == "income" else categorize(name),
+        "payment": payment.strip() or "Not specified",
+        "notes": notes.strip(),
+    }
+    transactions.append(tx)
+    return tx
+
+
+def save_transactions(transactions, filename=DATA_FILE):
+    fields = ["name", "amount", "date", "type", "category", "payment", "notes"]
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(transactions)
+
+
+def load_transactions(filename=DATA_FILE):
+    if not os.path.exists(filename):
+        return []
+    with open(filename, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def analyze(transactions, budget, income=None, month=None):
+    """Return a complete monthly analysis."""
+    if budget <= 0:
+        raise ValueError("Budget must be greater than zero.")
+
+    if month is None:
+        month = datetime.now().strftime("%Y-%m")
+
+    expenses = [
+        tx for tx in transactions
+        if tx["type"] == "expense" and tx["date"].startswith(month)
+    ]
+    incomes = [
+        tx for tx in transactions
+        if tx["type"] == "income" and tx["date"].startswith(month)
+    ]
+
+    total_expense = sum(float(tx["amount"]) for tx in expenses)
+    total_income = (
+        float(income) if income is not None
+        else sum(float(tx["amount"]) for tx in incomes)
+    )
+    budget_used = (total_expense / budget) * 100
+
+    if budget_used < 80:
+        status = "SAFE"
+    elif budget_used <= 100:
+        status = "WARNING"
+    else:
+        status = "OVER BUDGET"
+
+    category_spending = defaultdict(float)
+    for tx in expenses:
+        category_spending[tx["category"]] += float(tx["amount"])
+
+    average = total_expense / len(expenses) if expenses else 0
+    red_flags = [
+        tx for tx in expenses
+        if average and float(tx["amount"]) > 5 * average
+    ]
+
+    # Simple prediction: current month's total spending.
+    prediction = total_expense
+    savings = total_income - total_expense
+
+    return {
+        "month": month,
+        "expenses": expenses,
+        "income": total_income,
+        "total_expense": total_expense,
+        "budget": float(budget),
+        "budget_used": budget_used,
+        "status": status,
+        "category_spending": dict(category_spending),
+        "average_transaction": average,
+        "red_flags": red_flags,
+        "prediction": prediction,
+        "savings": savings,
+    }
+
+
+def print_report(result):
+    print("\n" + "=" * 55)
+    print("                 BUDGET ANALYZER")
+    print("=" * 55)
+    print(f"MONTH: {result['month']}\n")
+
+    print("EXPENSES:")
+    if result["expenses"]:
+        for tx in result["expenses"]:
+            print(
+                f"{tx['name']} -> {DISPLAY_CATEGORIES.get(tx['category'], tx['category'])}"
+                f" -> ₹{float(tx['amount']):.2f} -> {tx['date']}"
+            )
+    else:
+        print("No expenses recorded for this month.")
+
+    print(f"\nTOTAL SPENDING: ₹{result['total_expense']:.2f}")
+    print(f"BUDGET: ₹{result['budget']:.2f}")
+    print(f"BUDGET USED: {result['budget_used']:.2f}%")
+    print(f"STATUS: {result['status']}")
+
+    print("\nCATEGORY SPENDING:")
+    for category in DISPLAY_CATEGORIES:
+        amount = result["category_spending"].get(category, 0)
+        if amount:
+            print(f"{DISPLAY_CATEGORIES[category]}: ₹{amount:.2f}")
+
+    print("\nRED FLAG CHECK:")
+    if result["red_flags"]:
+        for tx in result["red_flags"]:
+            print(f"Unusual spending: {tx['name']} -> ₹{float(tx['amount']):.2f}")
+    else:
+        print("No unusual spending detected.")
+
+    print("\nMONTHLY SUMMARY:")
+    print(f"Income: ₹{result['income']:.2f}")
+    print(f"Expenses: ₹{result['total_expense']:.2f}")
+    print(f"Savings: ₹{result['savings']:.2f}")
+    print(f"Predicted next-month spending: ₹{result['prediction']:.2f}")
+    print("=" * 55)
+
+
+def seed_demo():
+    """Create the report's sample-style dataset."""
+    data = []
+    samples = [
+        (" MKT Enterprises #123 ", 300, "2026-11-01", "expense"),
+        ("Dominos Pizza", 25, "2026-11-02", "expense"),
+        ("dominos pizza", 25, "2026-11-02", "expense"),  # duplicate
+        ("Apple Unicorn", 600, "2026-11-04", "expense"),
+        ("Uber", 40, "2026-11-05", "expense"),
+        ("Pharmacy Store", 50, "2026-11-06", "expense"),
+        ("Monthly Allowance", 3000, "2026-11-01", "income"),
+    ]
+    for name, amount, date, kind in samples:
+        add_transaction(data, name, amount, date, kind)
+    return remove_duplicates(data)
+
+
+def input_transaction(transactions):
+    kind = input("Type (income/expense): ").strip().lower()
+    name = input("Receipt / source name: ")
+    amount = input("Amount (₹): ")
+    date = input("Date (YYYY-MM-DD): ")
+    payment = input("Payment method [UPI]: ").strip() or "UPI"
+    notes = input("Notes [optional]: ")
+    tx = add_transaction(transactions, name, amount, date, kind, payment, notes)
+    print(f"Added: {tx['name']} | ₹{tx['amount']:.2f} | {tx['category']}")
+
+
+def main():
+    transactions = load_transactions()
+
+    while True:
+        print("\n--- MENU ---")
+        print("1. Add transaction")
+        print("2. View monthly analysis")
+        print("3. Remove duplicate transactions")
+        print("4. Load demo data")
+        print("5. Save data")
+        print("6. Exit")
+
+        choice = input("Enter choice: ").strip()
+
+        try:
+            if choice == "1":
+                input_transaction(transactions)
+
+            elif choice == "2":
+                month = input("Month (YYYY-MM): ").strip()
+                budget = parse_amount(input("Monthly budget (₹): "))
+                result = analyze(transactions, budget, month=month)
+                print_report(result)
+
+            elif choice == "3":
+                before = len(transactions)
+                transactions = remove_duplicates(transactions)
+                print(f"Removed {before - len(transactions)} duplicate(s).")
+
+            elif choice == "4":
+                transactions = seed_demo()
+                print("Demo data loaded.")
+
+            elif choice == "5":
+                save_transactions(transactions)
+                print(f"Saved {len(transactions)} transaction(s) to {DATA_FILE}.")
+
+            elif choice == "6":
+                save_transactions(transactions)
+                print("Data saved. Goodbye!")
+                break
+
+            else:
+                print("Invalid choice. Please select 1-6.")
+
+        except ValueError as exc:
+            print(f"Input error: {exc}")
+
+
+if __name__ == "__main__":
+    main()
